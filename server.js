@@ -46,7 +46,7 @@ const db = admin.firestore();
 
 const app = express();
 
-// 🔥 CORS PARA PRODUCCIÓN
+// 🔥 CORS
 app.use(cors({
     origin: "*"
 }));
@@ -89,10 +89,9 @@ app.post("/crear-pago", async (req, res) => {
                 },
 
                 back_urls: {
-                    // ⚠️ CAMBIA ESTO DESPUÉS POR TU DOMINIO DE NETLIFY
-                    success: "https://TU-SITIO.netlify.app/gracias.html",
-                    failure: "https://TU-SITIO.netlify.app/error.html",
-                    pending: "https://TU-SITIO.netlify.app/pendiente.html"
+                    success: "https://darling-gaufre-294769.netlify.app/gracias.html",
+                    failure: "https://darling-gaufre-294769.netlify.app/error.html",
+                    pending: "https://darling-gaufre-294769.netlify.app/pendiente.html"
                 },
 
                 auto_return: "approved",
@@ -168,6 +167,11 @@ app.post("/webhook", async (req, res) => {
                 carrito: meta.carrito || []
             });
 
+            // 📲 WHATSAPP AUTOMÁTICO (IMPORTANTE ⚠️)
+            const mensaje = generarMensajeCompleto(data, meta);
+            console.log("📲 MENSAJE WHATSAPP:");
+            console.log(mensaje);
+
             console.log("✅ Pedido guardado y stock actualizado");
         }
 
@@ -179,7 +183,7 @@ app.post("/webhook", async (req, res) => {
     }
 });
 
-// 🚀 SERVIDOR (LISTO PARA RENDER)
+// 🚀 SERVIDOR (RENDER)
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {

@@ -45,9 +45,15 @@ admin.initializeApp({
 const db = admin.firestore();
 
 const app = express();
-app.use(cors());
+
+// 🔥 CORS PARA PRODUCCIÓN
+app.use(cors({
+    origin: "*"
+}));
+
 app.use(express.json());
 
+// 🔥 MERCADO PAGO
 const client = new MercadoPagoConfig({
     accessToken: "APP_USR-5021755149745946-040518-97323883ca24caefe768f36d4356cc4f-3315715483"
 });
@@ -73,6 +79,7 @@ app.post("/crear-pago", async (req, res) => {
         const response = await preference.create({
             body: {
                 items,
+
                 metadata: {
                     nombre: datos?.nombre || "",
                     telefono: datos?.telefono || "",
@@ -80,12 +87,16 @@ app.post("/crear-pago", async (req, res) => {
                     referencias: datos?.referencias || "",
                     carrito: carrito
                 },
+
                 back_urls: {
-                    success: "http://localhost:5500/gracias.html",
-                    failure: "http://localhost:5500/error.html",
-                    pending: "http://localhost:5500/pendiente.html"
+                    // ⚠️ CAMBIA ESTO DESPUÉS POR TU DOMINIO DE NETLIFY
+                    success: "https://TU-SITIO.netlify.app/gracias.html",
+                    failure: "https://TU-SITIO.netlify.app/error.html",
+                    pending: "https://TU-SITIO.netlify.app/pendiente.html"
                 },
-                // ❌ auto_return eliminado (causaba el error)
+
+                auto_return: "approved",
+
                 external_reference: "pedido_" + Date.now()
             }
         });
@@ -131,9 +142,12 @@ app.post("/webhook", async (req, res) => {
 
                     if (docSnap.exists) {
                         const stockActual = docSnap.data().stock || 0;
+
                         await ref.update({
                             stock: Math.max(0, stockActual - producto.cantidad)
                         });
+
+                        console.log(`📉 Stock actualizado: ${producto.nombre}`);
                     }
                 }
             }
@@ -165,7 +179,9 @@ app.post("/webhook", async (req, res) => {
     }
 });
 
-// 🚀 SERVIDOR
-app.listen(3000, () => {
-    console.log("🚀 Servidor corriendo en http://localhost:3000");
+// 🚀 SERVIDOR (LISTO PARA RENDER)
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log("🚀 Servidor corriendo en puerto " + PORT);
 });

@@ -1,9 +1,7 @@
 import admin from "firebase-admin";
-import { readFileSync } from "fs";
 
-const serviceAccount = JSON.parse(
-    readFileSync("./cerro-girasol-firebase-adminsdk-fbsvc-78e4d9c7cd.json", "utf8")
-);
+// 🔥 USAR VARIABLE DE ENTORNO (RENDER)
+const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
 import express from "express";
 import cors from "cors";
@@ -75,7 +73,6 @@ app.post("/crear-pago", async (req, res) => {
 
         console.log("📦 Items enviados a MP:", items);
 
-        // 🔥 VALIDACIÓN EXTRA
         items.forEach((item, i) => {
             if (!item.title || isNaN(item.quantity) || isNaN(item.unit_price)) {
                 console.log("❌ ERROR EN ITEM:", i, item);
@@ -122,8 +119,6 @@ app.post("/crear-pago", async (req, res) => {
 
     } catch (error) {
         console.error("❌ ERROR MERCADO PAGO:", error);
-
-        // 🔥 LOGS CLAVE PARA ENCONTRAR EL ERROR
         console.error("📛 ERROR COMPLETO:", JSON.stringify(error, null, 2));
         console.error("📛 RESPONSE DATA:", error.response?.data);
 
@@ -134,7 +129,7 @@ app.post("/crear-pago", async (req, res) => {
     }
 });
 
-// 🔔 WEBHOOK (SIN CAMBIOS)
+// 🔔 WEBHOOK
 app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");

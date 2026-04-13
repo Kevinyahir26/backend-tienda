@@ -3,6 +3,9 @@ import admin from "firebase-admin";
 // 🔥 USAR VARIABLE DE ENTORNO
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
+// 🔥 ARREGLAR SALTOS DE LÍNEA (CLAVE)
+serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
@@ -20,7 +23,7 @@ const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// 🔥 MERCADO PAGO (YA CON TU TOKEN REAL)
+// 🔥 MERCADO PAGO
 const client = new MercadoPagoConfig({
     accessToken: "APP_USR-4196814984350035-040517-24a4dd917f368c9ec4656f3e36f9f66f-3316869280"
 });
@@ -64,12 +67,17 @@ app.post("/crear-pago", async (req, res) => {
             }
         });
 
-        await db.collection("pedidos").doc(externalRef).set({
-            estado: "pendiente",
-            carrito,
-            datos,
-            fecha: new Date()
-        });
+        // 🔥 GUARDAR EN FIREBASE SIN ROMPER TODO
+        try {
+            await db.collection("pedidos").doc(externalRef).set({
+                estado: "pendiente",
+                carrito,
+                datos,
+                fecha: new Date()
+            });
+        } catch (err) {
+            console.log("⚠️ Firebase falló:", err.message);
+        }
 
         res.json({
             init_point: response.init_point
@@ -84,7 +92,7 @@ app.post("/crear-pago", async (req, res) => {
     }
 });
 
-// 🔔 WEBHOOK COMPLETO
+// 🔔 WEBHOOK
 app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");
@@ -104,7 +112,6 @@ app.post("/webhook", async (req, res) => {
             console.log("🔥 PAGO APROBADO");
 
             const externalRef = data.external_reference;
-
             const pedidoRef = db.collection("pedidos").doc(externalRef);
             const pedidoDoc = await pedidoRef.get();
 
@@ -112,9 +119,8 @@ app.post("/webhook", async (req, res) => {
 
             const pedido = pedidoDoc.data();
 
-            // 🔥 EVITAR DOBLE PROCESO
             if (pedido.estado === "pagado") {
-                console.log("⚠️ Ya estaba procesado");
+                console.log("⚠️ Ya procesado");
                 return res.sendStatus(200);
             }
 
@@ -136,7 +142,6 @@ app.post("/webhook", async (req, res) => {
                 });
             }
 
-            // ✅ MARCAR COMO PAGADO
             await pedidoRef.update({
                 estado: "pagado",
                 payment_id: data.id

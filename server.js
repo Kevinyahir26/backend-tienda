@@ -60,6 +60,7 @@ app.post("/crear-pago", async (req, res) => {
         const { carrito, datos } = req.body;
 
         console.log("🛒 Carrito recibido:", carrito);
+        console.log("📄 Datos cliente:", datos);
 
         if (!carrito || !Array.isArray(carrito) || carrito.length === 0) {
             return res.status(400).json({ error: "Carrito inválido" });
@@ -73,6 +74,13 @@ app.post("/crear-pago", async (req, res) => {
         }));
 
         console.log("📦 Items enviados a MP:", items);
+
+        // 🔥 VALIDACIÓN EXTRA
+        items.forEach((item, i) => {
+            if (!item.title || isNaN(item.quantity) || isNaN(item.unit_price)) {
+                console.log("❌ ERROR EN ITEM:", i, item);
+            }
+        });
 
         const preference = new Preference(client);
 
@@ -98,7 +106,9 @@ app.post("/crear-pago", async (req, res) => {
             }
         });
 
-        // 🔥 GUARDAR PEDIDO PREVIO (NUEVO PERO NO AFECTA NADA)
+        console.log("✅ RESPUESTA MP:", response);
+
+        // 🔥 GUARDAR PEDIDO PREVIO
         await db.collection("pedidos").doc(externalRef).set({
             estado: "pendiente",
             carrito,
@@ -112,7 +122,10 @@ app.post("/crear-pago", async (req, res) => {
 
     } catch (error) {
         console.error("❌ ERROR MERCADO PAGO:", error);
-        console.error("📛 DETALLE:", error.response?.data);
+
+        // 🔥 LOGS CLAVE PARA ENCONTRAR EL ERROR
+        console.error("📛 ERROR COMPLETO:", JSON.stringify(error, null, 2));
+        console.error("📛 RESPONSE DATA:", error.response?.data);
 
         res.status(500).json({
             error: "Error al crear pago",
@@ -121,7 +134,7 @@ app.post("/crear-pago", async (req, res) => {
     }
 });
 
-// 🔔 WEBHOOK
+// 🔔 WEBHOOK (SIN CAMBIOS)
 app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");
@@ -152,7 +165,6 @@ app.post("/webhook", async (req, res) => {
 
             let carrito = meta.carrito;
 
-            // 🔥 FALLBACK SI NO LLEGA METADATA
             if (!carrito) {
                 console.log("⚠️ No llegó carrito, buscando en Firebase");
 
@@ -170,7 +182,6 @@ app.post("/webhook", async (req, res) => {
                 return res.sendStatus(200);
             }
 
-            // 🚫 EVITAR DOBLE PROCESO
             const yaProcesado = await db.collection("pagos").doc(String(paymentId)).get();
 
             if (yaProcesado.exists) {
@@ -178,7 +189,6 @@ app.post("/webhook", async (req, res) => {
                 return res.sendStatus(200);
             }
 
-            // 🔥 DESCONTAR STOCK
             for (const producto of carrito) {
                 console.log("📦 Producto:", producto);
 
@@ -200,12 +210,10 @@ app.post("/webhook", async (req, res) => {
                 }
             }
 
-            // 🔥 MARCAR COMO PROCESADO
             await db.collection("pagos").doc(String(paymentId)).set({
                 fecha: new Date()
             });
 
-            // 🔥 GUARDAR PEDIDO FINAL
             await db.collection("pedidos").add({
                 paymentId,
                 estado: data.status,

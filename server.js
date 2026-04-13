@@ -51,7 +51,7 @@ app.use(express.json());
 
 // 🔥 MERCADO PAGO
 const client = new MercadoPagoConfig({
-    accessToken: "TU_ACCESS_TOKEN_AQUI"
+    accessToken: "APP_USR-5021755149745946-040518-97323883ca24caefe768f36d4356cc4f-3315715483"
 });
 
 // 🛒 CREAR PAGO
@@ -130,7 +130,7 @@ app.post("/webhook", async (req, res) => {
 
         const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
             headers: {
-                Authorization: `Bearer TU_ACCESS_TOKEN_AQUI`
+                Authorization: `Bearer APP_USR-5021755149745946-040518-97323883ca24caefe768f36d4356cc4f-3315715483`
             }
         });
 

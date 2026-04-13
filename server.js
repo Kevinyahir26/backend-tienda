@@ -46,16 +46,12 @@ const db = admin.firestore();
 
 const app = express();
 
-// 🔥 CORS
-app.use(cors({
-    origin: "*"
-}));
-
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
 // 🔥 MERCADO PAGO
 const client = new MercadoPagoConfig({
-    accessToken: "APP_USR-5021755149745946-040518-97323883ca24caefe768f36d4356cc4f-3315715483"
+    accessToken: "TU_ACCESS_TOKEN_AQUI"
 });
 
 // 🛒 CREAR PAGO
@@ -76,6 +72,8 @@ app.post("/crear-pago", async (req, res) => {
 
         const preference = new Preference(client);
 
+        const externalRef = "pedido_" + Date.now();
+
         const response = await preference.create({
             body: {
                 items,
@@ -88,16 +86,24 @@ app.post("/crear-pago", async (req, res) => {
                     carrito: carrito
                 },
 
+                external_reference: externalRef,
+
                 back_urls: {
                     success: "https://darling-gaufre-294769.netlify.app/gracias.html",
                     failure: "https://darling-gaufre-294769.netlify.app/error.html",
                     pending: "https://darling-gaufre-294769.netlify.app/pendiente.html"
                 },
 
-                auto_return: "approved",
-
-                external_reference: "pedido_" + Date.now()
+                auto_return: "approved"
             }
+        });
+
+        // 🔥 GUARDAR PEDIDO ANTES (PRO)
+        await db.collection("pedidos").doc(externalRef).set({
+            estado: "pendiente",
+            carrito,
+            datos,
+            fecha: new Date()
         });
 
         res.json({
@@ -106,73 +112,103 @@ app.post("/crear-pago", async (req, res) => {
 
     } catch (error) {
         console.error("❌ ERROR MERCADO PAGO:", error);
-
-        res.status(500).json({
-            error: "Error al crear pago",
-            detalle: error.message
-        });
+        res.status(500).json({ error: error.message });
     }
 });
 
 // 🔔 WEBHOOK
 app.post("/webhook", async (req, res) => {
     try {
+        console.log("📩 WEBHOOK RECIBIDO");
+
         const paymentId = req.body?.data?.id;
 
-        if (!paymentId) return res.sendStatus(200);
+        if (!paymentId) {
+            console.log("❌ No hay paymentId");
+            return res.sendStatus(200);
+        }
 
         const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
             headers: {
-                Authorization: `Bearer APP_USR-5021755149745946-040518-97323883ca24caefe768f36d4356cc4f-3315715483`
+                Authorization: `Bearer TU_ACCESS_TOKEN_AQUI`
             }
         });
 
         const data = await response.json();
 
+        console.log("💳 ESTADO:", data.status);
+
         if (data.status === "approved") {
+            console.log("🔥 PAGO APROBADO");
 
             const meta = data.metadata || {};
+            console.log("🧠 METADATA:", meta);
 
-            // 🔥 DESCONTAR STOCK
-            if (meta.carrito && Array.isArray(meta.carrito)) {
-                for (const producto of meta.carrito) {
-                    const ref = db.collection("productos").doc(producto.id);
-                    const docSnap = await ref.get();
+            let carrito = meta.carrito;
 
-                    if (docSnap.exists) {
-                        const stockActual = docSnap.data().stock || 0;
+            // 🔥 FALLBACK PRO (por si NO llega metadata)
+            if (!carrito) {
+                console.log("⚠️ No llegó carrito, usando external_reference");
 
-                        await ref.update({
-                            stock: Math.max(0, stockActual - producto.cantidad)
-                        });
+                const refPedido = data.external_reference;
+                const docPedido = await db.collection("pedidos").doc(refPedido).get();
 
-                        console.log(`📉 Stock actualizado: ${producto.nombre}`);
-                    }
+                if (docPedido.exists) {
+                    carrito = docPedido.data().carrito;
+                    console.log("✅ Carrito recuperado desde Firebase");
+                } else {
+                    console.log("❌ No se encontró pedido");
                 }
             }
 
-            // 🔥 GUARDAR PEDIDO
-            await db.collection("pedidos").add({
-                paymentId,
-                estado: data.status,
-                fecha: new Date(),
-                total: data.transaction_amount || 0,
-                email: data.payer?.email || "",
+            if (!carrito) {
+                console.log("❌ No hay carrito, no se descuenta stock");
+                return res.sendStatus(200);
+            }
 
-                nombre: meta.nombre || "",
-                telefono: meta.telefono || "",
-                direccion: meta.direccion || "",
-                referencias: meta.referencias || "",
+            // 🚫 EVITAR DOBLE PROCESO
+            const yaProcesado = await db.collection("pagos").doc(String(paymentId)).get();
 
-                carrito: meta.carrito || []
+            if (yaProcesado.exists) {
+                console.log("⚠️ Pago ya procesado");
+                return res.sendStatus(200);
+            }
+
+            // 🔥 DESCONTAR STOCK
+            for (const producto of carrito) {
+                console.log("📦 Procesando:", producto);
+
+                const ref = db.collection("productos").doc(producto.id);
+                const docSnap = await ref.get();
+
+                if (!docSnap.exists) {
+                    console.log("❌ Producto no existe:", producto.id);
+                    continue;
+                }
+
+                const stockActual = docSnap.data().stock || 0;
+
+                console.log("📊 Stock actual:", stockActual);
+
+                await ref.update({
+                    stock: Math.max(0, stockActual - producto.cantidad)
+                });
+
+                console.log("✅ Stock actualizado");
+            }
+
+            // 🔥 MARCAR COMO PROCESADO
+            await db.collection("pagos").doc(String(paymentId)).set({
+                fecha: new Date()
             });
 
-            // 📲 WHATSAPP AUTOMÁTICO (IMPORTANTE ⚠️)
+            console.log("💾 Pago guardado como procesado");
+
+            // 📲 WHATSAPP
             const mensaje = generarMensajeCompleto(data, meta);
-            console.log("📲 MENSAJE WHATSAPP:");
             console.log(mensaje);
 
-            console.log("✅ Pedido guardado y stock actualizado");
+            console.log("🎉 TODO CORRECTO");
         }
 
         res.sendStatus(200);
@@ -183,7 +219,7 @@ app.post("/webhook", async (req, res) => {
     }
 });
 
-// 🚀 SERVIDOR (RENDER)
+// 🚀 SERVIDOR
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {

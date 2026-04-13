@@ -59,6 +59,8 @@ app.post("/crear-pago", async (req, res) => {
     try {
         const { carrito, datos } = req.body;
 
+        console.log("🛒 Carrito recibido:", carrito);
+
         if (!carrito || !Array.isArray(carrito) || carrito.length === 0) {
             return res.status(400).json({ error: "Carrito inválido" });
         }
@@ -70,6 +72,8 @@ app.post("/crear-pago", async (req, res) => {
             currency_id: "MXN"
         }));
 
+        console.log("📦 Items enviados a MP:", items);
+
         const preference = new Preference(client);
 
         const externalRef = "pedido_" + Date.now();
@@ -77,7 +81,6 @@ app.post("/crear-pago", async (req, res) => {
         const response = await preference.create({
             body: {
                 items,
-
                 metadata: {
                     nombre: datos?.nombre || "",
                     telefono: datos?.telefono || "",
@@ -85,20 +88,17 @@ app.post("/crear-pago", async (req, res) => {
                     referencias: datos?.referencias || "",
                     carrito: carrito
                 },
-
-                external_reference: externalRef,
-
                 back_urls: {
                     success: "https://darling-gaufre-294769.netlify.app/gracias.html",
                     failure: "https://darling-gaufre-294769.netlify.app/error.html",
                     pending: "https://darling-gaufre-294769.netlify.app/pendiente.html"
                 },
-
-                auto_return: "approved"
+                auto_return: "approved",
+                external_reference: externalRef
             }
         });
 
-        // 🔥 GUARDAR PEDIDO ANTES (PRO)
+        // 🔥 GUARDAR PEDIDO PREVIO (NUEVO PERO NO AFECTA NADA)
         await db.collection("pedidos").doc(externalRef).set({
             estado: "pendiente",
             carrito,
@@ -112,7 +112,12 @@ app.post("/crear-pago", async (req, res) => {
 
     } catch (error) {
         console.error("❌ ERROR MERCADO PAGO:", error);
-        res.status(500).json({ error: error.message });
+        console.error("📛 DETALLE:", error.response?.data);
+
+        res.status(500).json({
+            error: "Error al crear pago",
+            detalle: error.message
+        });
     }
 });
 
@@ -136,33 +141,32 @@ app.post("/webhook", async (req, res) => {
 
         const data = await response.json();
 
-        console.log("💳 ESTADO:", data.status);
+        console.log("💳 Estado:", data.status);
 
         if (data.status === "approved") {
+
             console.log("🔥 PAGO APROBADO");
 
             const meta = data.metadata || {};
-            console.log("🧠 METADATA:", meta);
+            console.log("🧠 Metadata:", meta);
 
             let carrito = meta.carrito;
 
-            // 🔥 FALLBACK PRO (por si NO llega metadata)
+            // 🔥 FALLBACK SI NO LLEGA METADATA
             if (!carrito) {
-                console.log("⚠️ No llegó carrito, usando external_reference");
+                console.log("⚠️ No llegó carrito, buscando en Firebase");
 
                 const refPedido = data.external_reference;
                 const docPedido = await db.collection("pedidos").doc(refPedido).get();
 
                 if (docPedido.exists) {
                     carrito = docPedido.data().carrito;
-                    console.log("✅ Carrito recuperado desde Firebase");
-                } else {
-                    console.log("❌ No se encontró pedido");
+                    console.log("✅ Carrito recuperado");
                 }
             }
 
             if (!carrito) {
-                console.log("❌ No hay carrito, no se descuenta stock");
+                console.log("❌ No hay carrito, no se descuenta");
                 return res.sendStatus(200);
             }
 
@@ -176,25 +180,24 @@ app.post("/webhook", async (req, res) => {
 
             // 🔥 DESCONTAR STOCK
             for (const producto of carrito) {
-                console.log("📦 Procesando:", producto);
+                console.log("📦 Producto:", producto);
 
                 const ref = db.collection("productos").doc(producto.id);
                 const docSnap = await ref.get();
 
-                if (!docSnap.exists) {
+                if (docSnap.exists) {
+                    const stockActual = docSnap.data().stock || 0;
+
+                    console.log("📊 Stock actual:", stockActual);
+
+                    await ref.update({
+                        stock: Math.max(0, stockActual - producto.cantidad)
+                    });
+
+                    console.log(`📉 Stock actualizado: ${producto.nombre}`);
+                } else {
                     console.log("❌ Producto no existe:", producto.id);
-                    continue;
                 }
-
-                const stockActual = docSnap.data().stock || 0;
-
-                console.log("📊 Stock actual:", stockActual);
-
-                await ref.update({
-                    stock: Math.max(0, stockActual - producto.cantidad)
-                });
-
-                console.log("✅ Stock actualizado");
             }
 
             // 🔥 MARCAR COMO PROCESADO
@@ -202,13 +205,25 @@ app.post("/webhook", async (req, res) => {
                 fecha: new Date()
             });
 
-            console.log("💾 Pago guardado como procesado");
+            // 🔥 GUARDAR PEDIDO FINAL
+            await db.collection("pedidos").add({
+                paymentId,
+                estado: data.status,
+                fecha: new Date(),
+                total: data.transaction_amount || 0,
+                email: data.payer?.email || "",
+                nombre: meta.nombre || "",
+                telefono: meta.telefono || "",
+                direccion: meta.direccion || "",
+                referencias: meta.referencias || "",
+                carrito: carrito
+            });
 
-            // 📲 WHATSAPP
             const mensaje = generarMensajeCompleto(data, meta);
+            console.log("📲 MENSAJE WHATSAPP:");
             console.log(mensaje);
 
-            console.log("🎉 TODO CORRECTO");
+            console.log("✅ TODO CORRECTO");
         }
 
         res.sendStatus(200);

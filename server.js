@@ -8,33 +8,6 @@ import cors from "cors";
 import fetch from "node-fetch";
 import { MercadoPagoConfig, Preference } from "mercadopago";
 
-// 🔥 FUNCIÓN MENSAJE
-function generarMensajeCompleto(data, meta) {
-    let mensaje = `🔥 NUEVO PEDIDO 🔥\n\n`;
-
-    mensaje += `💳 Pago aprobado\n`;
-    mensaje += `💰 Total: $${data.transaction_amount}\n`;
-    mensaje += `📧 Email: ${data.payer?.email || "no definido"}\n`;
-    mensaje += `🆔 ID Pago: ${data.id}\n\n`;
-
-    if (meta) {
-        mensaje += `👤 Nombre: ${meta.nombre}\n`;
-        mensaje += `📞 Teléfono: ${meta.telefono}\n`;
-        mensaje += `📍 Dirección: ${meta.direccion}\n`;
-        mensaje += `📝 Referencias: ${meta.referencias}\n\n`;
-
-        mensaje += `🛒 Productos:\n`;
-
-        if (meta.carrito && Array.isArray(meta.carrito)) {
-            meta.carrito.forEach(p => {
-                mensaje += `- ${p.nombre} x${p.cantidad} ($${p.precio})\n`;
-            });
-        }
-    }
-
-    return mensaje;
-}
-
 // 🔥 FIREBASE
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
@@ -47,18 +20,15 @@ const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// 🔥 MERCADO PAGO
+// 🔥 MERCADO PAGO (YA CON TU TOKEN REAL)
 const client = new MercadoPagoConfig({
-    accessToken: "TU_ACCESS_TOKEN_AQUI"
+    accessToken: "APP_USR-4196814984350035-040517-24a4dd917f368c9ec4656f3e36f9f66f-3316869280"
 });
 
 // 🛒 CREAR PAGO
 app.post("/crear-pago", async (req, res) => {
     try {
         const { carrito, datos } = req.body;
-
-        console.log("🛒 Carrito recibido:", carrito);
-        console.log("📄 Datos cliente:", datos);
 
         if (!carrito || !Array.isArray(carrito) || carrito.length === 0) {
             return res.status(400).json({ error: "Carrito inválido" });
@@ -70,8 +40,6 @@ app.post("/crear-pago", async (req, res) => {
             unit_price: Number(p.precio),
             currency_id: "MXN"
         }));
-
-        console.log("📦 Items enviados a MP:", items);
 
         const preference = new Preference(client);
         const externalRef = "pedido_" + Date.now();
@@ -96,21 +64,13 @@ app.post("/crear-pago", async (req, res) => {
             }
         });
 
-        console.log("✅ RESPUESTA MP:", response);
+        await db.collection("pedidos").doc(externalRef).set({
+            estado: "pendiente",
+            carrito,
+            datos,
+            fecha: new Date()
+        });
 
-        // 🔥 GUARDAR PEDIDO SIN ROMPER
-        try {
-            await db.collection("pedidos").doc(externalRef).set({
-                estado: "pendiente",
-                carrito,
-                datos,
-                fecha: new Date()
-            });
-        } catch (err) {
-            console.log("⚠️ Firebase falló pero no rompe:", err.message);
-        }
-
-        // 🔥 ESTO ES LO QUE TE FALTABA
         res.json({
             init_point: response.init_point
         });
@@ -124,7 +84,7 @@ app.post("/crear-pago", async (req, res) => {
     }
 });
 
-// 🔔 WEBHOOK (igual que antes)
+// 🔔 WEBHOOK COMPLETO
 app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");
@@ -134,7 +94,7 @@ app.post("/webhook", async (req, res) => {
 
         const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
             headers: {
-                Authorization: `Bearer TU_ACCESS_TOKEN_AQUI`
+                Authorization: `Bearer APP_USR-4196814984350035-040517-24a4dd917f368c9ec4656f3e36f9f66f-3316869280`
             }
         });
 
@@ -142,6 +102,47 @@ app.post("/webhook", async (req, res) => {
 
         if (data.status === "approved") {
             console.log("🔥 PAGO APROBADO");
+
+            const externalRef = data.external_reference;
+
+            const pedidoRef = db.collection("pedidos").doc(externalRef);
+            const pedidoDoc = await pedidoRef.get();
+
+            if (!pedidoDoc.exists) return res.sendStatus(200);
+
+            const pedido = pedidoDoc.data();
+
+            // 🔥 EVITAR DOBLE PROCESO
+            if (pedido.estado === "pagado") {
+                console.log("⚠️ Ya estaba procesado");
+                return res.sendStatus(200);
+            }
+
+            // 🔻 DESCONTAR STOCK
+            for (const producto of pedido.carrito) {
+                const ref = db.collection("productos").doc(producto.id);
+
+                await db.runTransaction(async (t) => {
+                    const doc = await t.get(ref);
+
+                    if (!doc.exists) return;
+
+                    const stockActual = doc.data().stock || 0;
+                    const nuevoStock = stockActual - producto.cantidad;
+
+                    t.update(ref, {
+                        stock: nuevoStock < 0 ? 0 : nuevoStock
+                    });
+                });
+            }
+
+            // ✅ MARCAR COMO PAGADO
+            await pedidoRef.update({
+                estado: "pagado",
+                payment_id: data.id
+            });
+
+            console.log("✅ STOCK ACTUALIZADO");
         }
 
         res.sendStatus(200);

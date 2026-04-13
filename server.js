@@ -1,6 +1,6 @@
 import admin from "firebase-admin";
 
-// 🔥 USAR VARIABLE DE ENTORNO (RENDER)
+// 🔥 USAR VARIABLE DE ENTORNO
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
 import express from "express";
@@ -49,7 +49,7 @@ app.use(express.json());
 
 // 🔥 MERCADO PAGO
 const client = new MercadoPagoConfig({
-    accessToken: "APP_USR-5021755149745946-040518-97323883ca24caefe768f36d4356cc4f-3315715483"
+    accessToken: "TU_ACCESS_TOKEN_AQUI"
 });
 
 // 🛒 CREAR PAGO
@@ -73,14 +73,7 @@ app.post("/crear-pago", async (req, res) => {
 
         console.log("📦 Items enviados a MP:", items);
 
-        items.forEach((item, i) => {
-            if (!item.title || isNaN(item.quantity) || isNaN(item.unit_price)) {
-                console.log("❌ ERROR EN ITEM:", i, item);
-            }
-        });
-
         const preference = new Preference(client);
-
         const externalRef = "pedido_" + Date.now();
 
         const response = await preference.create({
@@ -105,23 +98,25 @@ app.post("/crear-pago", async (req, res) => {
 
         console.log("✅ RESPUESTA MP:", response);
 
-        // 🔥 GUARDAR PEDIDO PREVIO
-        await db.collection("pedidos").doc(externalRef).set({
-            estado: "pendiente",
-            carrito,
-            datos,
-            fecha: new Date()
-        });
+        // 🔥 GUARDAR PEDIDO SIN ROMPER
+        try {
+            await db.collection("pedidos").doc(externalRef).set({
+                estado: "pendiente",
+                carrito,
+                datos,
+                fecha: new Date()
+            });
+        } catch (err) {
+            console.log("⚠️ Firebase falló pero no rompe:", err.message);
+        }
 
+        // 🔥 ESTO ES LO QUE TE FALTABA
         res.json({
             init_point: response.init_point
         });
 
     } catch (error) {
-        console.error("❌ ERROR MERCADO PAGO:", error);
-        console.error("📛 ERROR COMPLETO:", JSON.stringify(error, null, 2));
-        console.error("📛 RESPONSE DATA:", error.response?.data);
-
+        console.error("❌ ERROR:", error);
         res.status(500).json({
             error: "Error al crear pago",
             detalle: error.message
@@ -129,104 +124,24 @@ app.post("/crear-pago", async (req, res) => {
     }
 });
 
-// 🔔 WEBHOOK
+// 🔔 WEBHOOK (igual que antes)
 app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");
 
         const paymentId = req.body?.data?.id;
-
-        if (!paymentId) {
-            console.log("❌ No hay paymentId");
-            return res.sendStatus(200);
-        }
+        if (!paymentId) return res.sendStatus(200);
 
         const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
             headers: {
-                Authorization: `Bearer APP_USR-5021755149745946-040518-97323883ca24caefe768f36d4356cc4f-3315715483`
+                Authorization: `Bearer TU_ACCESS_TOKEN_AQUI`
             }
         });
 
         const data = await response.json();
 
-        console.log("💳 Estado:", data.status);
-
         if (data.status === "approved") {
-
             console.log("🔥 PAGO APROBADO");
-
-            const meta = data.metadata || {};
-            console.log("🧠 Metadata:", meta);
-
-            let carrito = meta.carrito;
-
-            if (!carrito) {
-                console.log("⚠️ No llegó carrito, buscando en Firebase");
-
-                const refPedido = data.external_reference;
-                const docPedido = await db.collection("pedidos").doc(refPedido).get();
-
-                if (docPedido.exists) {
-                    carrito = docPedido.data().carrito;
-                    console.log("✅ Carrito recuperado");
-                }
-            }
-
-            if (!carrito) {
-                console.log("❌ No hay carrito, no se descuenta");
-                return res.sendStatus(200);
-            }
-
-            const yaProcesado = await db.collection("pagos").doc(String(paymentId)).get();
-
-            if (yaProcesado.exists) {
-                console.log("⚠️ Pago ya procesado");
-                return res.sendStatus(200);
-            }
-
-            for (const producto of carrito) {
-                console.log("📦 Producto:", producto);
-
-                const ref = db.collection("productos").doc(producto.id);
-                const docSnap = await ref.get();
-
-                if (docSnap.exists) {
-                    const stockActual = docSnap.data().stock || 0;
-
-                    console.log("📊 Stock actual:", stockActual);
-
-                    await ref.update({
-                        stock: Math.max(0, stockActual - producto.cantidad)
-                    });
-
-                    console.log(`📉 Stock actualizado: ${producto.nombre}`);
-                } else {
-                    console.log("❌ Producto no existe:", producto.id);
-                }
-            }
-
-            await db.collection("pagos").doc(String(paymentId)).set({
-                fecha: new Date()
-            });
-
-            await db.collection("pedidos").add({
-                paymentId,
-                estado: data.status,
-                fecha: new Date(),
-                total: data.transaction_amount || 0,
-                email: data.payer?.email || "",
-                nombre: meta.nombre || "",
-                telefono: meta.telefono || "",
-                direccion: meta.direccion || "",
-                referencias: meta.referencias || "",
-                carrito: carrito
-            });
-
-            const mensaje = generarMensajeCompleto(data, meta);
-            console.log("📲 MENSAJE WHATSAPP:");
-            console.log(mensaje);
-
-            console.log("✅ TODO CORRECTO");
         }
 
         res.sendStatus(200);

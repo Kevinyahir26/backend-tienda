@@ -48,9 +48,12 @@ app.post("/crear-pago", async (req, res) => {
         const externalRef = "pedido_" + Date.now();
 
         const response = await preference.create({
-            body: {
-                items,
-                metadata: {
+    body: {
+        items,
+
+        notification_url: "https://backend-tienda-mrvc.onrender.com/webhook",
+
+        metadata: {
                     nombre: datos?.nombre || "",
                     telefono: datos?.telefono || "",
                     direccion: datos?.direccion || "",
@@ -97,7 +100,7 @@ app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");
 
-        const paymentId = req.body?.data?.id;
+        const paymentId = req.body?.data?.id || req.query?.id;
         if (!paymentId) return res.sendStatus(200);
 
         const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {

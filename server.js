@@ -48,6 +48,7 @@ app.post("/crear-pago", async (req, res) => {
 
         let total = 0;
         const items = [];
+        const carritoValidado = []; // 🔥 NUEVO
 
         for (const p of carrito) {
             if (!p.id) {
@@ -74,6 +75,14 @@ app.post("/crear-pago", async (req, res) => {
 
             total += precio * cantidad;
 
+            // 🔥 GUARDAR INFO COMPLETA
+            carritoValidado.push({
+                id: p.id,
+                nombre: data.nombre,
+                cantidad,
+                precio
+            });
+
             items.push({
                 title: String(data.nombre),
                 quantity: cantidad,
@@ -94,7 +103,7 @@ app.post("/crear-pago", async (req, res) => {
                     telefono: datos?.telefono || "",
                     direccion: datos?.direccion || "",
                     referencias: datos?.referencias || "",
-                    carrito: carrito
+                    carrito: carritoValidado // 🔥 USAR VALIDADO
                 },
                 back_urls: {
                     success: `https://darling-gaufre-294769.netlify.app/gracias.html?ref=${externalRef}`,
@@ -129,7 +138,7 @@ app.post("/crear-pago", async (req, res) => {
         try {
             await db.collection("pedidos").doc(externalRef).set({
                 estado: "pendiente",
-                carrito,
+                carrito: carritoValidado, // 🔥 AQUÍ ESTÁ LA MAGIA
                 datos,
                 total: total,
                 folio: folio,
@@ -263,7 +272,7 @@ app.get("/pedido/:ref", async (req, res) => {
 });
 
 
-// 📲 WHATSAPP PRO
+// 📲 WHATSAPP PRO MEJORADO
 app.get("/whatsapp/:ref", async (req, res) => {
     try {
         const ref = req.params.ref;
@@ -289,12 +298,14 @@ app.get("/whatsapp/:ref", async (req, res) => {
         mensaje += `\n📦 *Productos:*\n`;
 
         data.carrito.forEach(p => {
-            mensaje += `• ${p.nombre} x${p.cantidad}\n`;
+            const subtotal = p.precio * p.cantidad;
+            mensaje += `• ${p.nombre}\n`;
+            mensaje += `  ${p.cantidad} x $${p.precio} = $${subtotal}\n`;
         });
 
-        mensaje += `\n📅 Fecha: ${new Date().toLocaleString()}`;
+        mensaje += `\n📅 Fecha: ${new Date(data.fecha._seconds * 1000).toLocaleString()}`;
 
-        const numero = "5218111843963"; // 👈 TU NÚMERO
+        const numero = "5218111843963";
 
         const url = `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
 

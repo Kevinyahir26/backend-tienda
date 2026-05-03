@@ -59,9 +59,7 @@ app.post("/crear-pago", async (req, res) => {
         const response = await preference.create({
             body: {
                 items,
-
                 notification_url: "https://backend-tienda-mrvc.onrender.com/webhook",
-
                 metadata: {
                     nombre: datos?.nombre || "",
                     telefono: datos?.telefono || "",
@@ -79,7 +77,7 @@ app.post("/crear-pago", async (req, res) => {
             }
         });
 
-        // 🔥 GUARDAR EN FIREBASE SIN ROMPER TODO
+        // 🔥 GUARDAR EN FIREBASE
         try {
             await db.collection("pedidos").doc(externalRef).set({
                 estado: "pendiente",
@@ -109,7 +107,6 @@ app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");
 
-        // 🔥 MÁS ROBUSTO
         const paymentId =
             req.body?.data?.id ||
             req.query?.["data.id"] ||
@@ -130,16 +127,30 @@ app.post("/webhook", async (req, res) => {
 
             const externalRef = data.external_reference;
             const pedidoRef = db.collection("pedidos").doc(externalRef);
-            const pedidoDoc = await pedidoRef.get();
 
-            if (!pedidoDoc.exists) return res.sendStatus(200);
+            let pedido;
 
-            const pedido = pedidoDoc.data();
+            // 🔥 TRANSACCIÓN (ANTI DOBLE PROCESO REAL)
+            await db.runTransaction(async (t) => {
+                const doc = await t.get(pedidoRef);
 
-            if (pedido.estado === "pagado") {
-                console.log("⚠️ Ya procesado");
-                return res.sendStatus(200);
-            }
+                if (!doc.exists) return;
+
+                pedido = doc.data();
+
+                if (pedido.estado === "pagado" || pedido.estado === "procesando") {
+                    console.log("⚠️ Ya procesado o en proceso");
+                    pedido = null;
+                    return;
+                }
+
+                // 🔒 MARCAR COMO PROCESANDO (ATÓMICO)
+                t.update(pedidoRef, {
+                    estado: "procesando"
+                });
+            });
+
+            if (!pedido) return res.sendStatus(200);
 
             // 🔻 DESCONTAR STOCK
             for (const producto of pedido.carrito) {

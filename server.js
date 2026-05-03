@@ -46,12 +46,38 @@ app.post("/crear-pago", async (req, res) => {
             return res.status(400).json({ error: "Carrito inválido" });
         }
 
-        const items = carrito.map(p => ({
-            title: String(p.nombre),
-            quantity: Number(p.cantidad),
-            unit_price: Number(p.precio),
-            currency_id: "MXN"
-        }));
+        // 🔥 NUEVO: VALIDAR PRODUCTOS DESDE FIREBASE
+        const items = [];
+
+        for (const p of carrito) {
+            if (!p.id) {
+                return res.status(400).json({ error: "Producto inválido" });
+            }
+
+            const ref = db.collection("productos").doc(p.id);
+            const doc = await ref.get();
+
+            if (!doc.exists) {
+                return res.status(400).json({ error: "Producto no existe" });
+            }
+
+            const data = doc.data();
+
+            // 🔒 VALIDAR STOCK
+            if (data.stock < p.cantidad) {
+                return res.status(400).json({
+                    error: `No hay suficiente stock de ${data.nombre}`
+                });
+            }
+
+            // 🔒 USAR PRECIO REAL
+            items.push({
+                title: String(data.nombre),
+                quantity: Number(p.cantidad),
+                unit_price: Number(data.precio),
+                currency_id: "MXN"
+            });
+        }
 
         const preference = new Preference(client);
         const externalRef = "pedido_" + Date.now();
@@ -144,7 +170,6 @@ app.post("/webhook", async (req, res) => {
                     return;
                 }
 
-                // 🔒 MARCAR COMO PROCESANDO (ATÓMICO)
                 t.update(pedidoRef, {
                     estado: "procesando"
                 });

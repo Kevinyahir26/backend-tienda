@@ -32,7 +32,7 @@ const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// 🔥 MERCADO PAGO (USANDO VARIABLE DE ENTORNO)
+// 🔥 MERCADO PAGO
 const client = new MercadoPagoConfig({
     accessToken: process.env.MP_ACCESS_TOKEN
 });
@@ -46,7 +46,7 @@ app.post("/crear-pago", async (req, res) => {
             return res.status(400).json({ error: "Carrito inválido" });
         }
 
-        // 🔥 NUEVO: VALIDAR PRODUCTOS DESDE FIREBASE
+        let total = 0;
         const items = [];
 
         for (const p of carrito) {
@@ -63,18 +63,21 @@ app.post("/crear-pago", async (req, res) => {
 
             const data = doc.data();
 
-            // 🔒 VALIDAR STOCK
             if (data.stock < p.cantidad) {
                 return res.status(400).json({
                     error: `No hay suficiente stock de ${data.nombre}`
                 });
             }
 
-            // 🔒 USAR PRECIO REAL
+            const precio = Number(data.precio);
+            const cantidad = Number(p.cantidad);
+
+            total += precio * cantidad;
+
             items.push({
                 title: String(data.nombre),
-                quantity: Number(p.cantidad),
-                unit_price: Number(data.precio),
+                quantity: cantidad,
+                unit_price: precio,
                 currency_id: "MXN"
             });
         }
@@ -94,7 +97,7 @@ app.post("/crear-pago", async (req, res) => {
                     carrito: carrito
                 },
                 back_urls: {
-                    success: "https://darling-gaufre-294769.netlify.app/gracias.html",
+                    success: `https://darling-gaufre-294769.netlify.app/gracias.html?ref=${externalRef}`,
                     failure: "https://darling-gaufre-294769.netlify.app/error.html",
                     pending: "https://darling-gaufre-294769.netlify.app/pendiente.html"
                 },
@@ -103,12 +106,33 @@ app.post("/crear-pago", async (req, res) => {
             }
         });
 
-        // 🔥 GUARDAR EN FIREBASE
+        // 🔥 GENERAR FOLIO
+        const contadorRef = db.collection("config").doc("contadorPedidos");
+
+        let folio = "PED-0001";
+
+        await db.runTransaction(async (t) => {
+            const doc = await t.get(contadorRef);
+
+            let numero = 1;
+
+            if (doc.exists) {
+                numero = doc.data().ultimo + 1;
+            }
+
+            t.set(contadorRef, { ultimo: numero });
+
+            folio = "PED-" + String(numero).padStart(4, "0");
+        });
+
+        // 🔥 GUARDAR PEDIDO
         try {
             await db.collection("pedidos").doc(externalRef).set({
                 estado: "pendiente",
                 carrito,
                 datos,
+                total: total,
+                folio: folio,
                 fecha: new Date()
             });
         } catch (err) {
@@ -128,7 +152,7 @@ app.post("/crear-pago", async (req, res) => {
     }
 });
 
-// 🔔 WEBHOOK
+// 🔔 WEBHOOK (sin cambios)
 app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");
@@ -156,7 +180,6 @@ app.post("/webhook", async (req, res) => {
 
             let pedido;
 
-            // 🔥 TRANSACCIÓN (ANTI DOBLE PROCESO REAL)
             await db.runTransaction(async (t) => {
                 const doc = await t.get(pedidoRef);
 
@@ -177,7 +200,6 @@ app.post("/webhook", async (req, res) => {
 
             if (!pedido) return res.sendStatus(200);
 
-            // 🔻 DESCONTAR STOCK
             for (const producto of pedido.carrito) {
                 const ref = db.collection("productos").doc(producto.id);
 
@@ -210,6 +232,79 @@ app.post("/webhook", async (req, res) => {
         res.sendStatus(500);
     }
 });
+
+
+// 🧾 OBTENER PEDIDO (MEJORADO)
+app.get("/pedido/:ref", async (req, res) => {
+    try {
+        const ref = req.params.ref;
+        const doc = await db.collection("pedidos").doc(ref).get();
+
+        if (!doc.exists) {
+            return res.status(404).json({ error: "Pedido no encontrado" });
+        }
+
+        const data = doc.data();
+
+        res.json({
+            folio: data.folio,
+            total: data.total,
+            nombre: data.datos?.nombre || "",
+            telefono: data.datos?.telefono || "",
+            direccion: data.datos?.direccion || "",
+            referencias: data.datos?.referencias || "",
+            carrito: data.carrito || [],
+            fecha: data.fecha
+        });
+
+    } catch (error) {
+        res.status(500).json({ error: "Error obteniendo pedido" });
+    }
+});
+
+
+// 📲 WHATSAPP PRO
+app.get("/whatsapp/:ref", async (req, res) => {
+    try {
+        const ref = req.params.ref;
+        const doc = await db.collection("pedidos").doc(ref).get();
+
+        if (!doc.exists) {
+            return res.status(404).json({ error: "Pedido no encontrado" });
+        }
+
+        const data = doc.data();
+
+        let mensaje = `🧾 *NUEVO PEDIDO*\n\n`;
+        mensaje += `📌 Folio: ${data.folio}\n`;
+        mensaje += `💰 Total: $${data.total}\n`;
+        mensaje += `👤 Cliente: ${data.datos?.nombre}\n`;
+        mensaje += `📞 Tel: ${data.datos?.telefono}\n`;
+        mensaje += `📍 Dirección: ${data.datos?.direccion}\n`;
+
+        if (data.datos?.referencias) {
+            mensaje += `📝 Referencias: ${data.datos.referencias}\n`;
+        }
+
+        mensaje += `\n📦 *Productos:*\n`;
+
+        data.carrito.forEach(p => {
+            mensaje += `• ${p.nombre} x${p.cantidad}\n`;
+        });
+
+        mensaje += `\n📅 Fecha: ${new Date().toLocaleString()}`;
+
+        const numero = "5218111843963"; // 👈 TU NÚMERO
+
+        const url = `https://wa.me/${numero}?text=${encodeURIComponent(mensaje)}`;
+
+        res.json({ url });
+
+    } catch (error) {
+        res.status(500).json({ error: "Error generando WhatsApp" });
+    }
+});
+
 
 // 🚀 SERVIDOR
 const PORT = process.env.PORT || 3000;

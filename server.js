@@ -1,10 +1,19 @@
 import admin from "firebase-admin";
 
+// 🔴 VALIDAR VARIABLE (IMPORTANTE)
+if (!process.env.FIREBASE_KEY) {
+    console.error("❌ FIREBASE_KEY NO EXISTE");
+    process.exit(1);
+}
+
 // 🔥 USAR VARIABLE DE ENTORNO
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 
-// 🔥 ARREGLAR SALTOS DE LÍNEA (CLAVE)
+// 🔥 ARREGLAR SALTOS DE LÍNEA (ANTES DE USARLO)
 serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
+
+// 🔍 LOG DESPUÉS DEL FIX
+console.log("🔥 Firebase cargado:", serviceAccount.client_email);
 
 import express from "express";
 import cors from "cors";
@@ -23,9 +32,9 @@ const app = express();
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// 🔥 MERCADO PAGO
+// 🔥 MERCADO PAGO (USANDO VARIABLE DE ENTORNO)
 const client = new MercadoPagoConfig({
-    accessToken: "APP_USR-4196814984350035-040517-24a4dd917f368c9ec4656f3e36f9f66f-3316869280"
+    accessToken: process.env.MP_ACCESS_TOKEN
 });
 
 // 🛒 CREAR PAGO
@@ -48,12 +57,12 @@ app.post("/crear-pago", async (req, res) => {
         const externalRef = "pedido_" + Date.now();
 
         const response = await preference.create({
-    body: {
-        items,
+            body: {
+                items,
 
-        notification_url: "https://backend-tienda-mrvc.onrender.com/webhook",
+                notification_url: "https://backend-tienda-mrvc.onrender.com/webhook",
 
-        metadata: {
+                metadata: {
                     nombre: datos?.nombre || "",
                     telefono: datos?.telefono || "",
                     direccion: datos?.direccion || "",
@@ -100,12 +109,17 @@ app.post("/webhook", async (req, res) => {
     try {
         console.log("📩 WEBHOOK RECIBIDO");
 
-        const paymentId = req.body?.data?.id || req.query?.id;
+        // 🔥 MÁS ROBUSTO
+        const paymentId =
+            req.body?.data?.id ||
+            req.query?.["data.id"] ||
+            req.query?.id;
+
         if (!paymentId) return res.sendStatus(200);
 
         const response = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, {
             headers: {
-                Authorization: `Bearer APP_USR-4196814984350035-040517-24a4dd917f368c9ec4656f3e36f9f66f-3316869280`
+                Authorization: `Bearer ${process.env.MP_ACCESS_TOKEN}`
             }
         });
 
